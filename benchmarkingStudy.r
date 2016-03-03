@@ -1,5 +1,3 @@
-#------------------------------------------------------------------------------------------
-#------------------------------------------------------------------------------------------
 
 library("mlr")
 library("OpenML")
@@ -95,7 +93,7 @@ getMultiplexer = function(){
     makeIntegerParam("repeats", lower = 1, upper = 50)
   )
   
-  bls = list(lrn1,lrn2,lrn3,lrn4,lrn5,lrn6,lrn7,lrn8,lrn9,lrn10,lrn11)
+  bls = list(lrn1,lrn2,lrn3,lrn4,lrn5,lrn7,lrn8,lrn9,lrn10,lrn11)#lrn6
   lrn = makeModelMultiplexer(bls)
   
   ps = makeModelMultiplexerParamSet(lrn,
@@ -104,11 +102,11 @@ getMultiplexer = function(){
                                     classif.IBk = ps3,
                                     classif.JRip = ps4,
                                     classif.OneR = ps5,
-                                    classif.PART = ps6,
+                                    #classif.PART = ps6,
                                     classif.J48 = ps7,
                                     classif.gbm = ps8,
                                     classif.avNNet = ps11
-                                    )
+  )
   
   return(list(lrn,ps));
 }
@@ -117,25 +115,32 @@ getMultiplexer = function(){
 #------------------------------------------------------------------------------------------
 
 
-tuningTask = function(oml.task.id, learner, par.set, budget, perf.measures) {
+tuningTask = function(oml.dataset.id, learner, par.set, budget, perf.measures) {
   
-  # specify the task
-  oml.task = getOMLTask(oml.task.id)
+  # specify the dataset
+  oml.dataset = getOMLDataSet(oml.dataset.id)
   
   # make a check is imputation is needed
-  if (any(is.na(oml.task$input$data$data))) {
+  if (any(is.na(oml.dataset$data))) {
     catf(" - Data imputation required ...")
-    temp = impute(data = oml.task$input$data.set$data, classes = list(numeric = imputeMean(), factor = imputeMode()))
-    oml.task$input$data.set$data = temp$data
+    temp = impute(data = oml.dataset$data, classes = list(numeric = imputeMean(), factor = imputeMode()))
+    oml.dataset$data = temp$data
   }
   
-  obj = convertOMLTaskToMlr(oml.task)
+  if(typeof(oml.dataset$data[,oml.dataset$target.features])!="factor"){
+    oml.dataset$data[,oml.dataset$target.features] = cut(as.numeric(oml.dataset$data[,oml.dataset$target.features]),breaks = 2)
+  }
+  
+  obj = makeClassifTask(data = oml.dataset$data, target = oml.dataset$desc$default.target.attribute)
   obj$mlr.rin = makeResampleDesc("CV", iters = 10L)
+  
+  #set nn-net weight
+  learner$base.learners$classif.avNNet$par.vals$MaxNWts = 5 * (ncol(oml.dataset$data)) + 5 + 1
   
   # Random Search
   ctrl.random = makeTuneControlRandom(maxit = budget)
   
-  #irace 
+  #irace
   ctrl.irace = makeTuneControlIrace(budget = 5*budget)
   
   #MBO
@@ -147,19 +152,21 @@ tuningTask = function(oml.task.id, learner, par.set, budget, perf.measures) {
   ctrls = list(ctrl.random, ctrl.mbo, ctrl.irace)
   
   inner = makeResampleDesc("CV", iters=5)
-  outer = makeResampleInstance("CV", iters=10, task=obj$mlr.task)
+  outer = makeResampleInstance("CV", iters=10, task=obj)
   
   # Calling tuning techniques (for each tuning control ... )
   aux = lapply(ctrls, function(ct) {
     
     print(paste("Control",toString(class(ct))))
     
-    tuned.learner = makeTuneWrapper(learner=learner, resampling=inner, par.set=par.set, 
+    tuned.learner = makeTuneWrapper(learner=learner, resampling=inner, par.set=par.set,
                                     control=ct, show.info=FALSE)
     
-    res = resample(learner=tuned.learner, task=obj$mlr.task, resampling=outer, 
-                   extract=getTuneResult, models=TRUE, show.info = FALSE, 
+    res = resample(learner=tuned.learner, task=obj, resampling=outer,
+                   extract=getTuneResult, models=TRUE, show.info = FALSE,
                    measures=perf.measures)
+    
+    print(res)
     
     return(res)
   })
@@ -173,9 +180,9 @@ tuningTask = function(oml.task.id, learner, par.set, budget, perf.measures) {
 
 getMBOControl = function(budget) {
   
-  mbo.control = makeMBOControl(iters = budget, 
+  mbo.control = makeMBOControl(iters = budget,
                                init.design.points = 5 * 3 * 11
-                               )
+  )
   mbo.control = setMBOControlInfill(mbo.control, crit = "ei") #cb throws an error that it is not in the list of crit
   mbo.control = setMBOControlInfill(mbo.control, opt = "focussearch",
                                     opt.restarts = 2L, opt.focussearch.maxit = 2L, opt.focussearch.points = 1000L)
@@ -188,6 +195,7 @@ getMBOControl = function(budget) {
 #------------------------------------------------------------------------------------------
 
 main = function() {
+  #sink("benmarkoutput.out")
   
   budget = 1000
   
@@ -198,14 +206,17 @@ main = function() {
   
   performance.measures = list(mmce, acc, timetrain, timepredict, timeboth)
   
-  task_ids = c(9967)
+  dataset_ids = c(4544,1475,44,1041,28,1491,1492,1493,16,14,1039,458)
   
-  for(task.id in task_ids){
-    print(paste("Task ID:",task.id))
+  for(dataset.id in dataset_ids){
+    print(paste("Dataset ID:",dataset.id))
     
-    output = tuningTask(oml.task.id = task.id, learner = lrn, par.set = ps, budget = budget, perf.measures = performance.measures)
+    output = tuningTask(oml.dataset.id = dataset.id, learner = lrn, par.set = ps, budget = budget, perf.measures = performance.measures)
+    save(output, file=paste("benchmarkoutputs/output_",dataset.id,sep=""))
     print(output)
   }
+  
+  #sink()
 }
 
 
@@ -216,5 +227,3 @@ main()
 
 #------------------------------------------------------------------------------------------
 #------------------------------------------------------------------------------------------
-
-
